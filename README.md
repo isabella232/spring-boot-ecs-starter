@@ -1,5 +1,5 @@
 # spring-boot-ecs-starter
-A starter project to deploy Spring Boot microservices in a ECS Cluster
+A starter project to deploy Spring Boot microservices in Amazon ECS Cluster
 
 This starter kit includes the following artifacts:
 
@@ -35,18 +35,18 @@ When you will launch the CloudFormation stack, provide some values when asked li
 <b>5. Test the service(s): </b> Wait untill Stack status is shown as Complete
 
 Check in Load Balancers list under EC2 Service, you will see a newly created ALB with name ECSALB.
-Access its DNS with as mentioned below, please use the DNS of your ALB and not the one shown below.
+Copy the NDS (A Record) of the ALB and test the service(s) as mentioned below and replace {ECSALB} with ALB DNS:
 
-<Your ALB URL>/service1
+{ECSALB}/service1
 You will see message "Welcome to the 3Pilar Global springboot service sample"
 
-<Your ALB URL>/service1/hello
+{ECSALB}/service1/hello
 You will see message "Hello, how are you today..."
 
-<Your ALB URL>/service2
+{ECSALB}/service2
 You will see message "Welcome to the 3Pilar Global springboot service2 sample"
 
-<Your ALB URL>/service2/hello
+{ECSALB}/service2/hello
 You will see message "Hello from service2..."
 
 When you call your multiple services using single ALB as mentioned in above, it is called path based routing when the ALB determines that which Target Group wikk service a request like /service1 or /service2
