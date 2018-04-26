@@ -20,7 +20,7 @@ Parameters:
   InstanceType:
     Description: EC2 instance type
     Type: String
-    Default: t2.micro
+    Default: t2.small
     AllowedValues: [t2.micro, t2.small, t2.medium, t2.large, m3.medium, m3.large,
       m3.xlarge, m3.2xlarge, m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge, m4.10xlarge,
       c4.large, c4.xlarge, c4.2xlarge, c4.4xlarge, c4.8xlarge, c3.large, c3.xlarge,
@@ -84,14 +84,14 @@ Resources:
     Properties:
       LogGroupName: !Join ['-', [ECSLogGroup, !Ref 'AWS::StackName']]
       RetentionInDays: 14
-  taskdefinition:
+  Service1taskdefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       ContainerDefinitions:
-      - Name: simple-app
+      - Name: Service1container
         Cpu: '10'
         Essential: 'true'
-        Image: nkkaushik/springbootservice:firstimg
+        Image: 356967975209.dkr.ecr.us-east-1.amazonaws.com/springbootservice1:1.1
         Memory: '300'
         LogConfiguration:
           LogDriver: awslogs
@@ -100,7 +100,25 @@ Resources:
             awslogs-region: !Ref 'AWS::Region'
             awslogs-stream-prefix: ecs-demo-app
         PortMappings:
-        - ContainerPort: 2221            
+        - ContainerPort: 2221 
+  Service2taskdefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+      - Name: Service2container
+        Cpu: '10'
+        Essential: 'true'
+        Image: 356967975209.dkr.ecr.us-east-1.amazonaws.com/springbootservice2:1.1
+        Memory: '300'
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref 'CloudwatchLogsGroup'
+            awslogs-region: !Ref 'AWS::Region'
+            awslogs-stream-prefix: test2-ecs-demo-app
+        PortMappings:
+        - ContainerPort: 2222   
+  # Creating Application Load Balancer        
   ECSALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -108,60 +126,121 @@ Resources:
       Scheme: internet-facing
       LoadBalancerAttributes:
       - Key: idle_timeout.timeout_seconds
-        Value: '45'
+        Value: 60
       Subnets: !Ref 'SubnetId'
       SecurityGroups: [!Ref 'EcsSecurityGroup']
+      
+  # Creating a default target group. This is not used, instead a separate
+  # target group is created per-service for each service (../services/*)  
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: ECSALB
+    Properties:    
+      Name: DefaultTargetGroup
+      Port: 80
+      Protocol: HTTP      
+      VpcId: !Ref 'VpcId'
+  
+  # LB Listener - single listener will service to all services  
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     DependsOn: ECSServiceRole
     Properties:
       DefaultActions:
       - Type: forward
-        TargetGroupArn: !Ref 'ECSTG'
+        TargetGroupArn: !Ref 'DefaultTargetGroup'
       LoadBalancerArn: !Ref 'ECSALB'
-      Port: '80'
+      Port: 80
       Protocol: HTTP
-  ECSALBListenerRule:
+  
+  # Target Group for Service1    
+  Service1TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: ECSALB
+    Properties:
+      HealthCheckIntervalSeconds: 90
+      HealthCheckPath: /service1
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      Name: Service1TargetGroup
+      Port: 80
+      Protocol: HTTP
+      Matcher: 
+        HttpCode: 200-299
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref 'VpcId'
+      
+  # Listener rule for service1
+  Service1ListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     DependsOn: ALBListener
     Properties:
       Actions:
       - Type: forward
-        TargetGroupArn: !Ref 'ECSTG'
+        TargetGroupArn: !Ref 'Service1TargetGroup'
       Conditions:
       - Field: path-pattern
-        Values: [/]
+        Values: [/service1*]
       ListenerArn: !Ref 'ALBListener'
       Priority: 1
-  ECSTG:
+  
+  # Target Group for Service2
+  Service2TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     DependsOn: ECSALB
     Properties:
       HealthCheckIntervalSeconds: 90
-      HealthCheckPath: /
+      HealthCheckPath: /service2
       HealthCheckProtocol: HTTP
       HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
-      Name: ECSTG
+      Name: Service2TargetGroup
       Port: 80
       Protocol: HTTP
+      Matcher: 
+        HttpCode: 200-299
       UnhealthyThresholdCount: 2
-      VpcId: !Ref 'VpcId'
+      VpcId: !Ref 'VpcId'      
+  
+  # Listener rule for service2
+  Service2ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    DependsOn: ALBListener
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'Service2TargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/service2*]
+      ListenerArn: !Ref 'ALBListener'
+      Priority: 2
+      
   ECSAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier: !Ref 'SubnetId'
-      LaunchConfigurationName: !Ref 'ContainerInstances'
+      LaunchConfigurationName: !Ref 'AutoScalLaunchConfig'
       MinSize: '1'
       MaxSize: !Ref 'MaxSize'
       DesiredCapacity: !Ref 'DesiredCapacity'
     CreationPolicy:
       ResourceSignal:
         Timeout: PT15M
-    UpdatePolicy:
-      AutoScalingReplacingUpdate:
-        WillReplace: 'true'
-  ContainerInstances:
+    UpdatePolicy:      
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+  AutoScalLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       ImageId: !FindInMap [AWSRegionToAMI, !Ref 'AWS::Region', AMIID]
@@ -177,16 +256,28 @@ Resources:
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ECSAutoScalingGroup --region ${AWS::Region}
   service:
     Type: AWS::ECS::Service
-    DependsOn: ALBListener
+    DependsOn: Service1ListenerRule
     Properties:
       Cluster: !Ref 'ECSCluster'
       DesiredCount: '1'
       LoadBalancers:
-      - ContainerName: simple-app
+      - ContainerName: Service1container
         ContainerPort: '2221'
-        TargetGroupArn: !Ref 'ECSTG'
+        TargetGroupArn: !Ref 'Service1TargetGroup'
       Role: !Ref 'ECSServiceRole'
-      TaskDefinition: !Ref 'taskdefinition'
+      TaskDefinition: !Ref 'Service1taskdefinition'
+  test2service:
+    Type: AWS::ECS::Service
+    DependsOn: Service2ListenerRule
+    Properties:
+      Cluster: !Ref 'ECSCluster'
+      DesiredCount: '1'
+      LoadBalancers:
+      - ContainerName: Service2container
+        ContainerPort: '2222'
+        TargetGroupArn: !Ref 'Service2TargetGroup'
+      Role: !Ref 'ECSServiceRole'
+      TaskDefinition: !Ref 'Service2taskdefinition'
   ECSServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -216,6 +307,16 @@ Resources:
       RoleARN: !GetAtt [AutoscalingRole, Arn]
       ScalableDimension: ecs:service:DesiredCount
       ServiceNamespace: ecs
+  Test2serviceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: test2service
+    Properties:
+      MaxCapacity: 2
+      MinCapacity: 1
+      ResourceId: !Join ['', [service/, !Ref 'ECSCluster', /, !GetAtt [test2service, Name]]]
+      RoleARN: !GetAtt [AutoscalingRole, Arn]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
   ServiceScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
     Properties:
@@ -229,6 +330,19 @@ Resources:
         StepAdjustments:
         - MetricIntervalLowerBound: 0
           ScalingAdjustment: 200
+  Test2serviceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: AStepPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref 'Test2serviceScalingTarget'
+      StepScalingPolicyConfiguration:
+        AdjustmentType: PercentChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+        - MetricIntervalLowerBound: 0
+          ScalingAdjustment: 200  
   ALB500sAlarmScaleUp:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -238,6 +352,23 @@ Resources:
       AlarmDescription: Alarm if our ALB generates too many HTTP 500s.
       Period: '60'
       AlarmActions: [!Ref 'ServiceScalingPolicy']
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt 
+            - ECSALB
+            - LoadBalancerFullName
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: HTTPCode_ELB_5XX_Count
+  Test2ALB500sAlarmScaleUp:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '10'
+      AlarmDescription: Alarm if our ALB generates too many HTTP 500s.
+      Period: '60'
+      AlarmActions: [!Ref 'Test2serviceScalingPolicy']
       Namespace: AWS/ApplicationELB
       Dimensions:
         - Name: LoadBalancer
@@ -263,7 +394,8 @@ Resources:
           - Effect: Allow
             Action: ['ecs:CreateCluster', 'ecs:DeregisterContainerInstance', 'ecs:DiscoverPollEndpoint',
               'ecs:Poll', 'ecs:RegisterContainerInstance', 'ecs:StartTelemetrySession',
-              'ecs:Submit*', 'logs:CreateLogStream', 'logs:PutLogEvents']
+              'ecs:Submit*', 'logs:CreateLogStream', 'logs:PutLogEvents', 'ecr:BatchCheckLayerAvailability',
+              'ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer', 'ecr:GetAuthorizationToken']
             Resource: '*'
   AutoscalingRole:
     Type: AWS::IAM::Role
@@ -291,10 +423,14 @@ Resources:
 Outputs:
   ecsservice:
     Value: !Ref 'service'
+  test2ecsservice:
+    Value: !Ref 'test2service'
   ecscluster:
     Value: !Ref 'ECSCluster'
   ECSALB:
     Description: Your ALB DNS URL
     Value: !Join ['', [!GetAtt [ECSALB, DNSName]]]
   taskdef:
-    Value: !Ref 'taskdefinition'
+    Value: !Ref 'Service1taskdefinition'
+  test2taskdef:
+    Value: !Ref 'Service2taskdefinition'
